@@ -1,0 +1,586 @@
+---
+title: "Data Analysis and Classification Modelling on Chemical Data"
+date: "`r Sys.Date()`"
+format: docx
+editor: visual
+bibliography: references.bib
+csl: "../harvard-university-of-the-west-of-england.csl"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,warning=FALSE, message = FALSE,comment = NA, error = TRUE)
+```
+
+```{r, echo=FALSE, include=FALSE}
+if(!require("ggplot2")){install.packages("ggplot2")}
+if(!require("corrplot")){install.packages("corrplot")}
+if(!require("flextable")){install.packages("flextable")}
+if(!require("psych")){install.packages("pysch")}
+if(!require("naniar")){install.packages("naniar")}
+if(!require("dplyr")){install.packages("dplyr")}
+if(!require("GGally")){install.packages("GGally")}
+if(!require("paran")){install.packages("paran")}
+if(!require("ade4")){install.packages("ade4")}
+if(!require("factoextra")){install.packages("factoextra")}
+if(!require("english")){install.packages("english")}
+if(!require("rpart")){install.packages("rpart")}
+if(!require("rpart.plot")){install.packages("rpart.plot")}
+if(!require("stats")){install.packages("stats")}
+if(!require("randomForest")){install.packages("randomForest")}
+if(!require("vctrs")){install.packages("vctrs")}
+if(!require("caret")){install.packages("caret")}
+if(!require("class")){install.packages("class")}
+if(!require("mclust")){install.packages("mclust")}
+if(!require("MASS")){install.packages("MASS")}
+if(!require("assertr")){install.packages("assertr")}
+if(!require("mice")){install.packages("mice")}
+
+
+
+library(ggplot2)
+library(corrplot)
+library(flextable)
+library(psych)
+library(naniar)
+library(dplyr)
+library(GGally)
+library(paran)
+library(ade4)
+library(factoextra)
+library(english)
+library(rpart)
+library(rpart.plot)
+library(stats)
+library(randomForest)
+library(vctrs)
+library(caret)
+library(class)
+library(mclust)
+library(MASS)
+library(assertr)
+library(mice)
+
+
+```
+
+```{r, include=FALSE}
+
+chem_data = read.csv('../data/23003895.csv', header = T, stringsAsFactors = TRUE)
+
+```
+
+```{r, include=FALSE}
+# missing data analysis 
+
+nrow(chem_data)
+table(complete.cases(chem_data))
+
+pct_miss <- ((nrow(chem_data) - sum(complete.cases(chem_data))) / nrow(chem_data) * 100)
+
+
+sum(rowSums(is.na(chem_data))>1)
+sum(rowSums(is.na(chem_data))==1)
+# rows with missing data only have one piece of missing data
+
+which(is.na(chem_data))
+
+gg_miss_upset(chem_data)
+gg_miss_var(chem_data)
+m_vars<-miss_var_summary(chem_data)
+
+as.english(pct_miss)
+ 
+```
+
+#### Missing values
+
+The first step was to examine the proportion of data which was missing. Table 1 shows which variables contained missing data and the number of observations which contained a missing value in that variable.
+
+```{r,echo=FALSE}
+miss_ft <- flextable(m_vars[m_vars$n_miss>0,]) |> theme_booktabs(bold_header = TRUE)
+
+fontsize(miss_ft, size = 10, part = "all")
+```
+
+**Table 1** shows the variables which contained missing data and the proportions of missing data in those variables.
+
+As only `r as.english(pct_miss)` percent of the data were missing, only the observations which had complete cases were used for the dimension reduction and the classification models.
+
+```{r, include=FALSE}
+chem_data <- chem_data[complete.cases(chem_data),]
+
+```
+
+```{r, include=FALSE}
+
+# set Nf to no. of observations
+Nf<-nrow(chem_data)
+
+# proportions for training, test and validation
+Nf*.25
+Ntraining<-round(Nf*.5)
+Nvalid<-ceiling(Nf*.25)
+Ntest<-Nf-(Ntraining+Nvalid)
+
+#Ntraining
+#Nvalid
+#Ntest
+
+# label the data with A,B,C according to the proportions of the splits
+set.seed(20)
+Split<- sample(c(rep("A",Ntraining),rep("B",Ntest),rep("C",Nvalid)),Nf,replace=FALSE)
+
+#table(Split)
+
+# create training, test and validation sets 
+training<- chem_data[Split=="A",]
+test<- chem_data[Split=="B",]
+validation<- chem_data[Split=="C",]
+
+
+```
+
+The data was first split into training, test and validation sets with a split of 50% training, 25% test and 25% validation. Functions from the base R [@base] were used for this. Each observations was assigned a letter with 50% getting A, representing the training set. 25% of the dataset were assigned B, and 25% were assigned C, representing the test and validation sets. This ensured that each observation was only put into one of the sets.
+
+#### Exploratory Data Analysis on the training set
+
+```{r, include=FALSE}
+training$V21<-as.factor(training$V21)
+levels(training$V21)
+yTable<-table(training$V21)
+yTable
+```
+
+The data shows a relatively even distribution between the classes (A-E), therefore no resampling was needed for this data.
+
+```{r, echo=FALSE}
+#maha_dist(training)
+maha_dist(training) %>% hist(main="", xlab="")
+
+```
+
+**Figure 1**. The average mahalanobis distance for each row in the training set. The `maha_dist` function from the assertr package [@assertr] was used to measure this.
+
+The larger values along the x axis could be potential outliers. However, more information on the features of the data would be needed to determine the expected values for each variable and decide whether these would be considered outliers. Figure 1 shows that there are no extreme outliers in the training set.
+
+```{r, echo=FALSE, fig.dim = c(4, 2)}
+# violin plots for each variable and each class of the training set 
+i = 1
+
+
+for (v in training[,-21]) {
+  #options(repr.plot.width = 6, repr.plot.height =6)
+  box_plots <- ggplot(training, aes(x = V21, y = v)) + geom_violin() +
+    geom_boxplot(width = .1, fill = "black") + labs(x='Classes', y = colnames(training[i]))
+  i = i + 1
+  print(box_plots)
+}
+
+```
+
+**Figure 2**. Violin plots and box plots which show the distribution of each variable and each class.
+
+From Figure 2, the majority of the variables appear to be normally distributed with few outliers. There are some negative values in variables V5, V11, V13, V14, V15 and V17. Many of the negative values show to be outliers for their class with the rest of the values being positive. This should be noted. This may be common for this type of data, more domain knowledge would be needed to identify if these are concerning.
+
+From Figure 1, we can see that V5 could be an indicator that an observation belongs to class D as they appear to cluster with a lower mean and smaller spread than the other classes. V11 appears to have a large difference in the mean and spread of each class. It appears to have a bi modal distribution overall. V11 could be an indicator that an observation belongs to class A, as these seem to cluster with a lower mean and smaller spread than the other classes.
+
+The plots in Figure 2 have been created using the ggplot2 [@ggplot2] package.
+
+```{r, echo=FALSE}
+# create summary stats
+training_summary <- describeBy(training[,-21], training$V21, mat = TRUE)
+
+training_summary$mean <- signif(training_summary$mean, 4)
+training_summary$sd <- signif(training_summary$sd, 4)
+training_summary$median <- signif(training_summary$median, 4)
+training_summary$min <- signif(training_summary$min, 4)
+training_summary$max <- signif(training_summary$max, 4)
+
+#select only stats we want to see
+training_summary <- training_summary[,c('group1', 'n', 'mean', 'median', 'sd', 'min', 'max')]
+
+# change group names to 'Class'
+colnames(training_summary)[colnames(training_summary)=="group1"]<-"Class"
+
+training_summary<-cbind(variable=rep(colnames(training[,-21]),each=5), training_summary)
+
+# table formatting 
+ds_ft <- merge_v(flextable(training_summary),j=1)|> theme_booktabs(bold_header = TRUE)
+
+
+fontsize(ds_ft, size = 9, part = "all")
+```
+
+**Table 2**. The number of observations, mean, median, standard deviation, min and max for each variable separated by each class.
+
+Table 2 Allows the structure of the data to be viewed, the scale for each variable and any differences between the descriptive statistics between the groups but within variables. Again, we can notice the negative values in the data, these may be of concern, but more information about the data would be needed to determine if negative values are appropriate for these variables.
+
+This has been created using the `describeBy` function from the [@psych] package to produce a matrix of descriptive statistics from the data grouped by the label (A,B,C,D,E) of the observation. From the base R [@base] package `cbind` is used to combine the names of the variables for the matrix of descriptive statistics for each label. Flextable [@gohel2023] is used to create the table with formatting.
+
+```{r, echo=FALSE}
+# correlation plot of training set
+corrplot(cor(training[,1:20]),method="circle", tl.col="black")
+```
+
+**Figure 3**. The correlation plot of the variables in the training set. Produced using the stats [@stats] and the corrplot [@corrplot] packages.
+
+From the correlation plot in Figure 3, we can see that there are a few variables which are correlated. Variable V14 with V13 and V17 appear to be strongly negatively correlated. Variable V17 and V15 also appear to be strongly negatively correlated. Variables V14 and V15 appear to have moderate positive correlation with each other. This means that there are possibles relationships between the variables and means we can potentially reduces the dimensionality of the dataset using Principal Component Analysis (PCA).
+
+#### Principal Components Analysis
+
+```{r, include=FALSE}
+
+# performing parallel analysis to see which eigen values are over 1
+
+ParallelAnalysis_training<-paran(training[,1:20],iterations=5000)
+PA_retained <- ParallelAnalysis_training$Retained
+
+```
+
+```{r, include=FALSE}
+
+# perform pca on training set
+nfeature = ncol(training) - 1 
+
+# pca retaining all 20 dims
+training_pca_all<-dudi.pca(training[,1:20],scannf = F, nf = nfeature)
+
+#look at eigenvalues
+get_eigenvalue(training_pca_all)
+#look at scree plot
+fviz_screeplot(training_pca_all,addlabels = TRUE)
+
+# pca with the number of retained dimensions from the parallel analysis
+training_pca<-dudi.pca(training[,1:20],scannf = F, nf=PA_retained)
+
+
+#attributes(training_pca)
+#training_pca$rank
+#training_pca$li
+#training_pca$cent
+#training_pca$co
+#training_pca$eig
+#training_pca$nf
+#training_pca$c1
+
+
+#fviz_pca_biplot(training_pca, repel = T,label="var")
+
+eng_pa <- as.english(PA_retained)
+
+```
+
+Performing parallel analysis prior to PCA shows that `r eng_pa` dimensions should be retained, as these had eigenvalues greater than one. This shows how much variation is being explained more than by chance, and so how many dimensions to retain to explain this variation.
+
+The `dudi.pca` function from the [@ade4] package was used to perform the PCA, and functions from the [@factoextra] package were used to get the eigen values and plot results of the PCA.
+
+```{r, include=FALSE}
+
+# save the principle components to a new data frame 
+PCS <- as.data.frame(training_pca$li)
+
+classification_train <- cbind(PCS, target = training[,21])
+#colnames(classification_train)
+
+```
+
+The true labels are returned to the observations using the `cbind` function from base R [@base].
+
+```{r, echo=FALSE}
+# make column 1 'variables' and have the variable names as the row names 
+C <- training_pca$c1
+C_tab <- cbind(rownames(C), C)
+C_tab[,-1] <- C
+colnames(C_tab)[1] <- 'Variables'
+
+ctab_ft <- flextable(C_tab)|> theme_booktabs(bold_header = TRUE)
+
+fontsize(ctab_ft, size = 9, part = "all")
+
+
+```
+
+**Table 3** The linear combination of the variables for each principal component created by the PCA.
+
+All of the original variables are represented by the principal components. Each value in Table 3 represents how the that variable is contributing to the result of the observation (in this case, the class label the observation is given).
+
+Principal component 1 is responsible for capturing the largest variation in the data. It shows a linear combination of the variables. The variables 13, 14, 15 and 17 are captured the most by principal component 1. The high negative correlation between variables 14 and 17 is captured here by showing that they have similar magnitudes in the opposite directions for their column normed scores. The high negative correlation between 17 and 15, and 13 and 14 are also captured by principal component 1, as well as the positive correlation between variables 14 and 15. These correlations were shown to be present in the original training dataset, see Figure 3. This means that principal component 1 can represent the results covered by these variables and reduces the need for all four raw variables to be in the data.
+
+Principal component 2 captures variable 5 in one direction and variable 6 in the other direction. Principal component 3 predominantly describes variable 18, and variable 12 to a slightly lesser extent in the opposite direction. Principal component 4 is capturing variable 4. It is also capturing variables 9, 3 and 7 to a lesser extent in the opposite direction. Principal component 5 is predominantly capturing variable 1. It is also capturing variable 2 and 12 in the same direction and 11 and 5 in the opposite direction.
+
+Here we have the results of all 20 variables captured by `r eng_pa` dimensions. This shows that we can still capture the same information from the observations but with fewer dimensions.
+
+```{r, include=FALSE}
+# apply the pca to the test and validation sets 
+
+# test set
+# scale the data in the same way
+# - avg for each col / sd for each col
+test_scaled <- t(apply(test[,-21],1,function(x){
+  (x - training_pca$cent)/ training_pca$norm
+}))
+
+# convert to matrix in order to do matrix multiplication
+pc_mat <- as.matrix(training_pca$c1)
+
+# project the scaled test data onto the principal components  
+# save as df 
+test_pca <- as.data.frame(test_scaled %*% pc_mat)
+#head(test_pca)
+
+# add the labels
+classification_test <- cbind(test_pca, target = test[,21])
+#head(classification_test)
+#head(test)
+
+# do the same process for the validation data 
+val_scaled <- t(apply(validation[,-21],1,function(x){
+  (x - training_pca$cent)/ training_pca$norm
+}))
+
+val_pca <- as.data.frame(val_scaled %*% pc_mat)
+classification_val <- cbind(val_pca, target = validation[,21])
+
+
+# test method on the training data to make sure training_pca$li was
+# the same as scaling the training data and mm by pc_mat
+#tt_scaled <- t(apply(training[,-21],1,function(x){
+#  (x - training_pca$cent)/ training_pca$norm
+#}))
+#tt_pca <- as.data.frame(tt_scaled %*% pc_mat)
+#
+#head(training_pca$li)
+#head(tt_pca)
+
+```
+
+To perform the same PCA that was performed on the training set on the test and validation sets: the test and validation was first mean centered and scaled. Matrix multiplication was performed between these scaled datasets and the column normed scores from the PCA of the training set. This gives the values of the training and validation sets projected onto the PCA. This was then converted to a dataframe and the labels combined to the data frame.
+
+```{r, include=FALSE}
+
+# rename columns so that each set has the same column names 
+colnames(classification_train) <- c('PC1', 'PC2', 'PC3', 'PC4', 'PC5', 'target')
+colnames(classification_test) <- c('PC1', 'PC2', 'PC3', 'PC4', 'PC5', 'target')
+colnames(classification_val) <- c('PC1', 'PC2', 'PC3', 'PC4', 'PC5', 'target')
+
+```
+
+#### Classification models
+
+Five different classification models were trained and tested. The performance of the models was compared using the accuracy metric. Firstly, a Random Forest model was developed using the randomForest [@randomForest] package. Hyperparameter tuning was performed to asses the number of trees which should be used in the random forest model and the optimal number of variables to be considered at each split. To evaluate model performance the `confusionMatrix` function from the caret package [@kuhn2023] was used to create confusion matrices for each model. The class package [@class] was used to create the K Nearest Neighbors model (KNN). The KNN model was tested using from one to fifty neighbors (k) to obtain the k value which produced the optimal model performance. The Mclust package [@mclust] was used to perform model based discriminant analysis (MBDA). The MASS [@MASS] package was used for linear discriminant analysis (LDA) and quadratic discriminant analysis (QDA).
+
+```{r, include=FALSE}
+# use on the training and test sets without pca 
+set.seed(2)
+
+#head(training)
+
+RF_model1 <- randomForest(formula = V21~., data = training,  mtry=ncol(training)-1, ntree=500)
+#RF_model1
+plot(RF_model1)
+RF_model1
+
+RF_model2 <- randomForest(formula = V21~., data = training,  mtry=ncol(training)-1, ntree=1000)
+plot(RF_model2)
+RF_model2
+
+RF_model3 <- randomForest(formula = V21~., data = training,  mtry=ncol(training)-1, ntree=200)
+plot(RF_model3)
+RF_model3
+
+RF_model4 <- randomForest(formula = V21~., data = training,  mtry=ncol(training)-1, ntree=5000)
+plot(RF_model4)
+RF_model4
+
+
+# find the optimal number of predictor variables to consider at the splits to produce the smallest out of bag error 
+mod_tune <- tuneRF(x=training[,-21], y=training[,21], ntreeTry = 1000, mtry=ncol(training)-1, trace = FALSE)
+mod_tune
+# pick num variables with the smallest error
+m <- which.min(mod_tune[,2])
+# select the number of variables 
+mtry <- mod_tune[m,1]
+
+# create the final RF model using the optimal number of trees and the number of variables calculated above 
+RF_model_f <- randomForest(formula = V21~., data = training,  mtry=mtry, ntree=1000)
+RF_model_f
+
+```
+
+```{r, include=FALSE}
+RF_predictions <- predict(RF_model_f, newdata=test)
+
+predictions_table <- table(RF_predictions, test[,21])
+
+# caret package
+cm_rf <- confusionMatrix(predictions_table)
+cm_rf
+
+#attributes(cm)
+
+# accuracy of rf model 
+rf_ac <- (cm_rf$overall["Accuracy"] * 100)
+rf_ac
+#cm$byClass["Sensitivity"]
+#cm$overall
+#cm$byClass
+
+
+```
+
+```{r, include=FALSE}
+# from the training, test and validation sets which had pca performed on them, create sets of the train, test and val with just the data and not the labels. Create a separate variable which stores the labels
+
+# use these for models which need dim reduction done prior 
+
+train <- classification_train[,-6]
+test <-  classification_test[,-6]
+classes_train <-  classification_train[,6]
+classes_test <- classification_test[,6]
+val <- classification_val[,-6]
+classes_val <- classification_val[,6]
+```
+
+```{r, include=FALSE}
+
+#knn model 
+
+set.seed(300)
+
+# sqrt of the number of observations in the training set
+k_est = sqrt(nrow(classification_train))
+#k_est
+# function to create confusion matrices for each nearest neighbors model 
+cm_function <- function(x){table(classes_test,x[1:length(classes_test)])}
+
+# function to calculate the accuracy of each model 
+accuracy <- function(x){sum(diag(x)/sum(rowSums(x))) *100}
+
+# data frame to store the k value and accuracy of the model using that value of k
+knn_df <- data.frame(k = c(), accuracy = c())
+
+# try 1 - 50 for k
+for (i in 1:50) {
+  knn_i<-knn(train=train, test=test, cl=classes_train, k = i, prob=TRUE)
+  
+  cm <- cm_function(knn_i)
+  ac <- accuracy(cm)
+  
+  k_df <- data.frame(k = i, accuracy = ac)
+  
+  knn_df <- rbind(knn_df, k_df)
+  
+}
+
+# data frame with the ks and accuracy values
+#knn_df
+
+# which row has the highest accuracy 
+which.max(knn_df[,2])
+
+knn_ac <- knn_df[16,2]
+
+```
+
+```{r, include=FALSE}
+#model based discriminant analysis
+
+set.seed(200)
+# build model based discriminant analysis model 
+MBDA_mod<-MclustDA(train, classes_train, verbose=FALSE)
+
+MBDA_predictions <- predict(MBDA_mod, newdata = test)
+
+# create a confusion matrix for the mbda model
+mbda_cm <- cm_function(MBDA_predictions$classification)
+mbda_cm
+
+cm <- confusionMatrix(mbda_cm)
+#cm
+#cm$overall
+mbda_ac <- (cm$overall["Accuracy"] * 100)
+
+mbda_ac
+```
+
+```{r, include=FALSE}
+# lda with complete cases 
+# lda model using the sets after PCA
+
+# train the lda model 
+lda_train <- lda(target~., data=classification_train)
+
+# make predictions of the classes from the test data
+lda_predictions <- predict(lda_train, newdata = classification_test)
+#lda_predictions$class
+
+# create confusion matrix
+lda_cm <- cm_function(lda_predictions$class)
+lda_cm
+# use caret package to get the accuracy of the cm
+cm_lda <- confusionMatrix(lda_cm)
+lda_ac <- (cm_lda$overall["Accuracy"] * 100)
+
+lda_ac
+```
+
+```{r, include=FALSE}
+#qda model 
+
+qda_train<-qda(target~.,data=classification_train)
+
+# make predictions from the using qda model and test data
+
+qda_predictions<-predict(qda_train,newdata=classification_test)
+#qda_predictions$class
+
+
+# create confusion matrix
+qda_cm <- cm_function(qda_predictions$class)
+qda_cm
+# use caret package to get the accuracy of the cm
+cm_lda <- confusionMatrix(qda_cm)
+qda_ac <- (cm_lda$overall["Accuracy"] * 100)
+
+qda_ac 
+
+
+```
+
+Accuracy was chosen as it gives an overall representation of the performance of the model. The accuracy is calculated by the total number of correct predictions over the total number of observations.
+
+```{r, echo=FALSE}
+
+rf_ac <- round(rf_ac, 2)
+knn_ac <- round(knn_ac, 2)
+mbda_ac <- round(mbda_ac, 2)
+lda_ac <- round(lda_ac, 2)
+qda_ac <- round(qda_ac, 2)
+
+models <- data.frame(Model = c('Random Forest', 'KNN', 'MBDA', 'LDA', 'QDA'), Accuracy = c(rf_ac, knn_ac, mbda_ac, lda_ac, qda_ac))
+
+
+
+m_ft <- flextable(models)|> theme_booktabs(bold_header = TRUE)
+fontsize(m_ft, size = 9, part = "all")
+
+```
+
+**Table 4**. The in-sample performance for each of the classification models tested. The accuracy is measured as a percentage. KNN: k nearest neighbors. MBDA: model based discriminant analysis. LDA: linear discriminant analysis. QDA: quadratic discriminant analysis.
+
+```{r, include=FALSE}
+# random forest model with the validation set
+
+RF_predictions <- predict(RF_model_f, newdata=validation)
+
+predictions_table <- table(RF_predictions, validation[,21])
+
+cm_rf <- confusionMatrix(predictions_table)
+
+# accuracy of rf model 
+v_rf_ac <- (cm_rf$overall["Accuracy"] * 100)
+v_rf_ac <- round(v_rf_ac, 2)
+
+```
+
+Table 4 shows the best performing model to be the Random Forest model with an accuracy of `r rf_ac`% on the in-sample test data. This model had a much higher accuracy than the other models. The model also had a greater performance on the out-of-sample validation set, with an accuracy of `r v_rf_ac`%. This suggests that the Random Forest model is not overfitting the training data and demonstrates how it performs on unseen data. The Random Forest model was performed on all features of the data, without prior PCA. Therefore, for optimal classification performance, the findings from this report suggests that all variables that were present in the original dataset should be measured.
